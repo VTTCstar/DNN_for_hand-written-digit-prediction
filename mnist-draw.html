@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Digit recognizer</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --paper: #fafaf8;
+    --line: #d8d6cf;
+    --accent: #2f5d50;
+    --accent-light: #e8f0ed;
+    --muted: #7a786f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .app {
+    width: 100%;
+    max-width: 760px;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 24px;
+  }
+  .layout {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .pad-col { flex: 0 0 auto; }
+  .side-col { flex: 1 1 260px; min-width: 240px; }
+
+  #pad {
+    border: 1.5px solid var(--ink);
+    border-radius: 4px;
+    background: #000;
+    cursor: crosshair;
+    touch-action: none;
+    display: block;
+  }
+  .pad-controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 9px 16px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--ink); }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  button.primary:hover { background: #244b40; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .preview-label {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0 0 8px;
+  }
+  #preview {
+    width: 112px;
+    height: 112px;
+    border: 1px solid var(--line);
+    image-rendering: pixelated;
+    background: #000;
+  }
+
+  .result {
+    margin-top: 20px;
+  }
+  .result-digit {
+    font-size: 56px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .result-conf {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .bars {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 14px 1fr 40px;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .bar-track {
+    height: 8px;
+    background: var(--accent-light);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+    width: 0%;
+  }
+  .bar-pct { color: var(--muted); text-align: right; }
+
+  .status {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 14px;
+    min-height: 18px;
+  }
+  .status.error { color: #b3432c; }
+
+  .config {
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+  .config label {
+    font-size: 12px;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .config input {
+    width: 100%;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Digit recognizer</h1>
+  <p class="subtitle">Draw a digit 0–9. It's captured as a 28×28 grayscale grid, the same shape as MNIST.</p>
+
+  <div class="layout">
+    <div class="pad-col">
+      <canvas id="pad" width="280" height="280"></canvas>
+      <div class="pad-controls">
+        <button id="clearBtn">Clear</button>
+        <button id="predictBtn" class="primary">Predict</button>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="side-col">
+      <p class="preview-label">28 × 28 input</p>
+      <canvas id="preview" width="28" height="28"></canvas>
+
+      <div class="result" id="result" style="display:none;">
+        <div class="result-digit" id="resultDigit">–</div>
+        <div class="result-conf" id="resultConf"></div>
+        <div class="bars" id="bars"></div>
+      </div>
+
+      <div class="config">
+        <label for="apiUrl">Prediction endpoint (POST, expects JSON body { pixels: number[784] })</label>
+        <input id="apiUrl" type="text" placeholder="http://localhost:5000/predict" value="http://localhost:5000/predict">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const pad = document.getElementById('pad');
+const ctx = pad.getContext('2d', { willReadFrequently: true });
+const preview = document.getElementById('preview');
+const previewCtx = preview.getContext('2d');
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const resultDigit = document.getElementById('resultDigit');
+const resultConf = document.getElementById('resultConf');
+const barsEl = document.getElementById('bars');
+const apiUrlInput = document.getElementById('apiUrl');
+
+ctx.fillStyle = '#000';
+ctx.fillRect(0, 0, pad.width, pad.height);
+ctx.lineWidth = 16;
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+ctx.strokeStyle = '#fff';
+
+let drawing = false;
+let lastX = 0, lastY = 0;
+let hasInk = false;
+
+function getPos(e) {
+  const rect = pad.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: (clientX - rect.left) * (pad.width / rect.width),
+    y: (clientY - rect.top) * (pad.height / rect.height)
+  };
+}
+
+function startDraw(e) {
+  e.preventDefault();
+  drawing = true;
+  hasInk = true;
+  const p = getPos(e);
+  lastX = p.x; lastY = p.y;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, ctx.lineWidth / 2, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  updatePreview();
+}
+
+function moveDraw(e) {
+  if (!drawing) return;
+  e.preventDefault();
+  const p = getPos(e);
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(p.x, p.y);
+  ctx.stroke();
+  lastX = p.x; lastY = p.y;
+  updatePreview();
+}
+
+function endDraw() {
+  drawing = false;
+}
+
+pad.addEventListener('mousedown', startDraw);
+pad.addEventListener('mousemove', moveDraw);
+window.addEventListener('mouseup', endDraw);
+pad.addEventListener('touchstart', startDraw, { passive: false });
+pad.addEventListener('touchmove', moveDraw, { passive: false });
+pad.addEventListener('touchend', endDraw);
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, pad.width, pad.height);
+  hasInk = false;
+  updatePreview();
+  resultEl.style.display = 'none';
+  statusEl.textContent = '';
+  statusEl.className = 'status';
+});
+
+// Offscreen canvas used as scratch space for the resize/centering steps below.
+const scratch = document.createElement('canvas');
+const scratchCtx = scratch.getContext('2d', { willReadFrequently: true });
+
+// MNIST digits aren't just "whatever you drew, wherever you drew it" — the
+// original dataset crops each digit to its ink, scales it to fit a 20x20 box
+// (preserving aspect ratio, with anti-aliasing), and centers it in the 28x28
+// frame by center of mass. A naive full-canvas downsample looks nothing like
+// that to the network, so we replicate the same pipeline here.
+function get28x28() {
+  const full = ctx.getImageData(0, 0, pad.width, pad.height).data;
+
+  // 1. Find the bounding box of the ink (non-black pixels) in the 280x280 pad.
+  let minX = pad.width, minY = pad.height, maxX = -1, maxY = -1;
+  const THRESH = 20;
+  for (let y = 0; y < pad.height; y++) {
+    for (let x = 0; x < pad.width; x++) {
+      const v = full[(y * pad.width + x) * 4];
+      if (v > THRESH) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  const out = new Float32Array(28 * 28); // all zero = blank canvas
+  if (maxX < 0) return out; // nothing drawn yet
+
+  const boxW = maxX - minX + 1;
+  const boxH = maxY - minY + 1;
+
+  // 2. Scale the cropped ink so its longer side fits in a 20-cell box
+  //    (20 of the 28 grid cells, matching MNIST's normalization), preserving
+  //    aspect ratio. drawImage does the anti-aliasing for us here.
+  const targetCells = 20;
+  const cellPx = pad.width / 28; // 10, size of one grid cell in source pixels
+  const scale = (targetCells * cellPx) / Math.max(boxW, boxH);
+  const scaledW = Math.max(1, Math.round(boxW * scale));
+  const scaledH = Math.max(1, Math.round(boxH * scale));
+
+  scratch.width = pad.width;
+  scratch.height = pad.height;
+  scratchCtx.imageSmoothingEnabled = true;
+  scratchCtx.fillStyle = '#000';
+  scratchCtx.fillRect(0, 0, scratch.width, scratch.height);
+  // Draw the scaled digit roughly centered in the scratch canvas for now;
+  // we'll correct to true center-of-mass in step 3.
+  const drawX = (scratch.width - scaledW) / 2;
+  const drawY = (scratch.height - scaledH) / 2;
+  scratchCtx.drawImage(pad, minX, minY, boxW, boxH, drawX, drawY, scaledW, scaledH);
+
+  // 3. Downsample to 28x28 with box averaging.
+  const block = scratch.width / 28;
+  const grid = new Float32Array(28 * 28);
+  const scratchData = scratchCtx.getImageData(0, 0, scratch.width, scratch.height).data;
+  for (let gy = 0; gy < 28; gy++) {
+    for (let gx = 0; gx < 28; gx++) {
+      let sum = 0, count = 0;
+      const startY = Math.floor(gy * block);
+      const startX = Math.floor(gx * block);
+      for (let y = startY; y < startY + block; y++) {
+        for (let x = startX; x < startX + block; x++) {
+          sum += scratchData[(y * scratch.width + x) * 4];
+          count++;
+        }
+      }
+      grid[gy * 28 + gx] = sum / count / 255;
+    }
+  }
+
+  // 4. Shift the 28x28 grid so its center of mass lands on the middle cell,
+  //    matching MNIST's own centering convention.
+  let sumMass = 0, sumX = 0, sumY = 0;
+  for (let gy = 0; gy < 28; gy++) {
+    for (let gx = 0; gx < 28; gx++) {
+      const m = grid[gy * 28 + gx];
+      sumMass += m;
+      sumX += m * gx;
+      sumY += m * gy;
+    }
+  }
+  if (sumMass === 0) return grid;
+  const comX = sumX / sumMass;
+  const comY = sumY / sumMass;
+  const shiftX = Math.round(13.5 - comX);
+  const shiftY = Math.round(13.5 - comY);
+
+  for (let gy = 0; gy < 28; gy++) {
+    for (let gx = 0; gx < 28; gx++) {
+      const srcX = gx - shiftX;
+      const srcY = gy - shiftY;
+      if (srcX >= 0 && srcX < 28 && srcY >= 0 && srcY < 28) {
+        out[gy * 28 + gx] = grid[srcY * 28 + srcX];
+      }
+    }
+  }
+  return out;
+}
+
+function updatePreview() {
+  const grid = get28x28();
+  const imgData = previewCtx.createImageData(28, 28);
+  for (let i = 0; i < 784; i++) {
+    const v = Math.round(grid[i] * 255);
+    imgData.data[i * 4] = v;
+    imgData.data[i * 4 + 1] = v;
+    imgData.data[i * 4 + 2] = v;
+    imgData.data[i * 4 + 3] = 255;
+  }
+  previewCtx.putImageData(imgData, 0, 0);
+}
+
+function setStatus(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? 'status error' : 'status';
+}
+
+document.getElementById('predictBtn').addEventListener('click', async () => {
+  if (!hasInk) {
+    setStatus('Draw a digit first.', true);
+    return;
+  }
+  const pixels = Array.from(get28x28());
+  const url = apiUrlInput.value.trim();
+  if (!url) {
+    setStatus('Enter a prediction endpoint below.', true);
+    return;
+  }
+  setStatus('Predicting…');
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pixels })
+    });
+    if (!res.ok) throw new Error('Server returned ' + res.status);
+    const data = await res.json();
+    // Expected shape: { prediction: 7, probabilities: [0.01, 0.02, ..., 0.9, ...] } (10 values)
+    renderResult(data);
+    setStatus('');
+  } catch (err) {
+    setStatus('Could not reach the endpoint: ' + err.message, true);
+  }
+});
+
+function renderResult(data) {
+  const probs = data.probabilities || [];
+  const pred = data.prediction ?? (probs.length ? probs.indexOf(Math.max(...probs)) : '?');
+  resultEl.style.display = 'block';
+  resultDigit.textContent = pred;
+  if (probs.length) {
+    const topProb = probs[pred];
+    resultConf.textContent = (topProb * 100).toFixed(1) + '% confidence';
+  } else {
+    resultConf.textContent = '';
+  }
+  barsEl.innerHTML = '';
+  for (let d = 0; d < 10; d++) {
+    const p = probs[d] || 0;
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <span>${d}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${(p * 100).toFixed(1)}%"></span></span>
+      <span class="bar-pct">${(p * 100).toFixed(1)}%</span>
+    `;
+    barsEl.appendChild(row);
+  }
+}
+
+updatePreview();
+</script>
+</body>
+</html>

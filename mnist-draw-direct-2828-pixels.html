@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Digit recognizer</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --paper: #fafaf8;
+    --line: #d8d6cf;
+    --accent: #2f5d50;
+    --accent-light: #e8f0ed;
+    --muted: #7a786f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .app {
+    width: 100%;
+    max-width: 760px;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 24px;
+  }
+  .layout {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .pad-col { flex: 0 0 auto; }
+  .side-col { flex: 1 1 260px; min-width: 240px; }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(28, 10px);
+    grid-template-rows: repeat(28, 10px);
+    border: 1.5px solid var(--ink);
+    border-radius: 4px;
+    background: #000;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+    width: fit-content;
+  }
+  .cell {
+    width: 10px;
+    height: 10px;
+  }
+  .pad-controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 9px 16px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--ink); }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  button.primary:hover { background: #244b40; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+    max-width: 280px;
+  }
+
+  .result {
+    margin-top: 4px;
+  }
+  .result-digit {
+    font-size: 56px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .result-conf {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .bars {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 14px 1fr 40px;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .bar-track {
+    height: 8px;
+    background: var(--accent-light);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+    width: 0%;
+  }
+  .bar-pct { color: var(--muted); text-align: right; }
+
+  .status {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 14px;
+    min-height: 18px;
+  }
+  .status.error { color: #b3432c; }
+
+  .config {
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+  .config label {
+    font-size: 12px;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .config input {
+    width: 100%;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Digit recognizer</h1>
+  <p class="subtitle">Paint a digit 0–9 directly on the 28×28 grid — each cell is exactly one pixel sent to the model, no resizing or guessing involved.</p>
+
+  <div class="layout">
+    <div class="pad-col">
+      <div id="grid"></div>
+      <div class="pad-controls">
+        <button id="clearBtn">Clear</button>
+        <button id="predictBtn" class="primary">Predict</button>
+      </div>
+      <p class="hint">Click and drag to paint. Each stroke lightly brightens neighboring cells too, so digits don't come out as hard, jagged blocks.</p>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="side-col">
+      <div class="result" id="result" style="display:none;">
+        <div class="result-digit" id="resultDigit">–</div>
+        <div class="result-conf" id="resultConf"></div>
+        <div class="bars" id="bars"></div>
+      </div>
+
+      <div class="config">
+        <label for="apiUrl">Prediction endpoint (POST, expects JSON body { pixels: number[784] })</label>
+        <input id="apiUrl" type="text" placeholder="http://localhost:5000/predict" value="http://localhost:5000/predict">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const gridEl = document.getElementById('grid');
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const resultDigit = document.getElementById('resultDigit');
+const resultConf = document.getElementById('resultConf');
+const barsEl = document.getElementById('bars');
+const apiUrlInput = document.getElementById('apiUrl');
+
+const SIZE = 28;
+const intensity = new Float32Array(SIZE * SIZE); // the exact 784 values sent to the model
+const cellEls = [];
+let painting = false;
+let hasInk = false;
+
+// Build the 784 cell elements once.
+for (let i = 0; i < SIZE * SIZE; i++) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  gridEl.appendChild(cell);
+  cellEls.push(cell);
+}
+
+function paintCell(gx, gy) {
+  // A soft brush: the touched cell goes fully bright, and its immediate
+  // neighbors light up partially, so strokes read as smooth digits rather
+  // than blocky single pixels.
+  const NEIGHBORS = [
+    { dx: 0, dy: 0, v: 1.0 },
+    { dx: 1, dy: 0, v: 0.45 }, { dx: -1, dy: 0, v: 0.45 },
+    { dx: 0, dy: 1, v: 0.45 }, { dx: 0, dy: -1, v: 0.45 },
+    { dx: 1, dy: 1, v: 0.2 }, { dx: -1, dy: 1, v: 0.2 },
+    { dx: 1, dy: -1, v: 0.2 }, { dx: -1, dy: -1, v: 0.2 }
+  ];
+  for (const { dx, dy, v } of NEIGHBORS) {
+    const nx = gx + dx, ny = gy + dy;
+    if (nx < 0 || nx >= SIZE || ny < 0 || ny >= SIZE) continue;
+    const idx = ny * SIZE + nx;
+    intensity[idx] = Math.max(intensity[idx], v);
+    const gray = Math.round(intensity[idx] * 255);
+    cellEls[idx].style.background = `rgb(${gray},${gray},${gray})`;
+  }
+  hasInk = true;
+}
+
+function cellFromEvent(e) {
+  const rect = gridEl.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  const cellSize = rect.width / SIZE;
+  const gx = Math.floor((clientX - rect.left) / cellSize);
+  const gy = Math.floor((clientY - rect.top) / cellSize);
+  if (gx < 0 || gx >= SIZE || gy < 0 || gy >= SIZE) return null;
+  return { gx, gy };
+}
+
+function startPaint(e) {
+  e.preventDefault();
+  painting = true;
+  const c = cellFromEvent(e);
+  if (c) paintCell(c.gx, c.gy);
+}
+
+function movePaint(e) {
+  if (!painting) return;
+  e.preventDefault();
+  const c = cellFromEvent(e);
+  if (c) paintCell(c.gx, c.gy);
+}
+
+function endPaint() {
+  painting = false;
+}
+
+gridEl.addEventListener('mousedown', startPaint);
+gridEl.addEventListener('mousemove', movePaint);
+window.addEventListener('mouseup', endPaint);
+gridEl.addEventListener('touchstart', startPaint, { passive: false });
+gridEl.addEventListener('touchmove', movePaint, { passive: false });
+gridEl.addEventListener('touchend', endPaint);
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  intensity.fill(0);
+  for (const cell of cellEls) cell.style.background = '#000';
+  hasInk = false;
+  resultEl.style.display = 'none';
+  statusEl.textContent = '';
+  statusEl.className = 'status';
+});
+
+function setStatus(msg, isError) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? 'status error' : 'status';
+}
+
+document.getElementById('predictBtn').addEventListener('click', async () => {
+  if (!hasInk) {
+    setStatus('Paint a digit first.', true);
+    return;
+  }
+  const pixels = Array.from(intensity);
+  const url = apiUrlInput.value.trim();
+  if (!url) {
+    setStatus('Enter a prediction endpoint below.', true);
+    return;
+  }
+  setStatus('Predicting…');
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pixels })
+    });
+    if (!res.ok) throw new Error('Server returned ' + res.status);
+    const data = await res.json();
+    renderResult(data);
+    setStatus('');
+  } catch (err) {
+    setStatus('Could not reach the endpoint: ' + err.message, true);
+  }
+});
+
+function renderResult(data) {
+  const probs = data.probabilities || [];
+  const pred = data.prediction ?? (probs.length ? probs.indexOf(Math.max(...probs)) : '?');
+  resultEl.style.display = 'block';
+  resultDigit.textContent = pred;
+  if (probs.length) {
+    const topProb = probs[pred];
+    resultConf.textContent = (topProb * 100).toFixed(1) + '% confidence';
+  } else {
+    resultConf.textContent = '';
+  }
+  barsEl.innerHTML = '';
+  for (let d = 0; d < 10; d++) {
+    const p = probs[d] || 0;
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <span>${d}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${(p * 100).toFixed(1)}%"></span></span>
+      <span class="bar-pct">${(p * 100).toFixed(1)}%</span>
+    `;
+    barsEl.appendChild(row);
+  }
+}
+</script>
+</body>
+</html>
